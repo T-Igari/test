@@ -465,4 +465,5 @@ if st.session_state.phase == "record":
     if st.button(
         "⏺️ 記録終了 → ゴーストを作成",
     ):
+        print("nanimonaiyo")
     
