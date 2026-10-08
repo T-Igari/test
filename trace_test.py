@@ -1,8 +1,12 @@
-import streamlit as st
+from pathlib import Path
 
-# =========================================================
-# TRACE - Player Map Prototype
-# =========================================================
+code = r'''import streamlit as st
+import time
+
+# ============================================================
+# TRACE - Complete Streamlit Prototype
+# One-file game
+# ============================================================
 
 st.set_page_config(
     page_title="TRACE",
@@ -10,818 +14,597 @@ st.set_page_config(
     layout="centered",
 )
 
-# =========================================================
-# ステージ
-# =========================================================
+# ------------------------------------------------------------
+# Game constants
+# ------------------------------------------------------------
 
-# 0 = 床
-# 1 = 壁
-# 2 = スイッチ
-# 3 = ドア
-# 4 = ゴール
-# 5 = スタート
+WALL = "#"
+FLOOR = "."
+SWITCH = "S"
+DOOR = "D"
+GOAL = "G"
+START = "P"
+CRATE = "C"
+HAZARD = "X"
 
-LEVEL = [
-    [1, 1, 1, 1, 1, 1, 1, 1, 1],
-    [1, 5, 0, 0, 0, 0, 0, 4, 1],
-    [1, 0, 1, 1, 1, 1, 0, 1, 1],
-    [1, 0, 0, 0, 0, 2, 0, 3, 1],
-    [1, 0, 1, 1, 1, 1, 0, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+TILE = {
+    WALL: "⬛",
+    FLOOR: "",
+    SWITCH: "🟡",
+    DOOR: "🚪",
+    GOAL: "⭐",
+    START: "◎",
+    CRATE: "📦",
+    HAZARD: "⚠️",
+}
+
+# Levels are deliberately small so they work well on phones.
+# Legend:
+# # wall, . floor, S switch, D door, G goal, P start, C crate, X hazard
+LEVELS = [
+    {
+        "name": "First Echo",
+        "map": [
+            "#########",
+            "#P.....G#",
+            "#.#####.#",
+            "#....S.D#",
+            "#########",
+        ],
+        "hint": "最初の行動をゴーストに任せ、開いたドアを通ろう。",
+    },
+    {
+        "name": "Two Timelines",
+        "map": [
+            "###########",
+            "#P........#",
+            "#.#######.#",
+            "#....S....#",
+            "#####D#####",
+            "#.........#",
+            "#........G#",
+            "###########",
+        ],
+        "hint": "ゴーストがスイッチを踏むタイミングを利用しよう。",
+    },
+    {
+        "name": "The Long Echo",
+        "map": [
+            "#############",
+            "#P.........G#",
+            "#.#########.#",
+            "#...........#",
+            "#.#########.#",
+            "#...........#",
+            "#####S.D#####",
+            "#############",
+        ],
+        "hint": "長いルートを記録し、ゴーストをスイッチまで到達させよう。",
+    },
+    {
+        "name": "Crossing",
+        "map": [
+            "#############",
+            "#P....#.....#",
+            "#.##..#..##.#",
+            "#....S#.....#",
+            "#######D#####",
+            "#...........#",
+            "#..........G#",
+            "#############",
+        ],
+        "hint": "壁の向こうのスイッチをゴーストに押させよう。",
+    },
+    {
+        "name": "Final Echo",
+        "map": [
+            "###############",
+            "#P............#",
+            "#.###########.#",
+            "#.....S.......#",
+            "#####.#####D###",
+            "#.....#.......#",
+            "#.###.#.#####.#",
+            "#.............G",
+            "###############",
+        ],
+        "hint": "最後のステージ。過去の自分のルートそのものが攻略法になる。",
+    },
 ]
 
-ROWS = len(LEVEL)
-COLS = len(LEVEL[0])
+# ------------------------------------------------------------
+# Session state
+# ------------------------------------------------------------
 
-START_POS = (1, 1)
-GOAL_POS = (1, 7)
-SWITCH_POS = (3, 5)
-DOOR_POS = (3, 7)
+def load_level(index):
+    level = LEVELS[index]
+    grid = [list(row) for row in level["map"]]
 
+    start = None
+    goal = None
 
-# =========================================================
-# ゲーム初期化
-# =========================================================
+    for r, row in enumerate(grid):
+        for c, value in enumerate(row):
+            if value == START:
+                start = (r, c)
+                grid[r][c] = FLOOR
+            elif value == GOAL:
+                goal = (r, c)
+                grid[r][c] = GOAL
 
-def initialize_game():
-
-    st.session_state.player = START_POS
-
-    st.session_state.recorded_moves = []
-
+    st.session_state.grid = grid
+    st.session_state.start = start
+    st.session_state.goal = goal
+    st.session_state.player = start
     st.session_state.ghost = None
-    st.session_state.ghost_step = 0
+
+    st.session_state.moves = []
+    st.session_state.ghost_index = 0
 
     st.session_state.phase = "record"
-
-    st.session_state.switch_active = False
-
+    st.session_state.switch_on = False
     st.session_state.cleared = False
+    st.session_state.level_start_time = time.time()
+    st.session_state.message = "青いPを操作して行動を記録してください。"
 
-    st.session_state.message = (
-        "プレイヤーを操作してください。"
+
+def new_game():
+    st.session_state.level_index = 0
+    load_level(0)
+
+
+if "level_index" not in st.session_state:
+    new_game()
+
+# ------------------------------------------------------------
+# Utility
+# ------------------------------------------------------------
+
+def inside(pos):
+    r, c = pos
+    return (
+        0 <= r < len(st.session_state.grid)
+        and 0 <= c < len(st.session_state.grid[0])
     )
 
 
-if "player" not in st.session_state:
-    initialize_game()
+def tile_at(pos):
+    r, c = pos
+    return st.session_state.grid[r][c]
 
 
-# =========================================================
-# リセット
-# =========================================================
-
-def reset_game():
-    initialize_game()
-
-
-# =========================================================
-# 移動可能判定
-# =========================================================
-
-def is_walkable(row, col):
-
-    if row < 0 or row >= ROWS:
+def walkable(pos):
+    if not inside(pos):
         return False
 
-    if col < 0 or col >= COLS:
+    value = tile_at(pos)
+
+    if value == WALL:
         return False
 
-    tile = LEVEL[row][col]
-
-    # 壁
-    if tile == 1:
+    if value == DOOR and not st.session_state.switch_on:
         return False
 
-    # ドア
-    if tile == 3 and not st.session_state.switch_active:
+    if value == HAZARD:
         return False
 
     return True
 
 
-# =========================================================
-# ゴースト移動
-# =========================================================
+def activate_switch_if_needed():
+    # The switch remains active when either player or ghost is on it.
+    p = st.session_state.player
+    g = st.session_state.ghost
+
+    st.session_state.switch_on = (
+        tile_at(p) == SWITCH
+        or (g is not None and tile_at(g) == SWITCH)
+    )
+
 
 def move_ghost():
-
     if st.session_state.phase != "replay":
         return
 
-    moves = st.session_state.recorded_moves
+    moves = st.session_state.moves
 
-    if st.session_state.ghost_step >= len(moves):
+    if st.session_state.ghost_index >= len(moves):
         return
 
-    direction = moves[st.session_state.ghost_step]
+    dr, dc = moves[st.session_state.ghost_index]
 
     if st.session_state.ghost is None:
-        st.session_state.ghost = START_POS
+        st.session_state.ghost = st.session_state.start
 
     r, c = st.session_state.ghost
+    nxt = (r + dr, c + dc)
 
-    dr, dc = direction
+    if walkable(nxt):
+        st.session_state.ghost = nxt
 
-    nr = r + dr
-    nc = c + dc
+    st.session_state.ghost_index += 1
+    activate_switch_if_needed()
 
-    if is_walkable(nr, nc):
-        st.session_state.ghost = (nr, nc)
-
-    st.session_state.ghost_step += 1
-
-    # スイッチを踏んだ
-    if st.session_state.ghost == SWITCH_POS:
-        st.session_state.switch_active = True
-
-
-# =========================================================
-# プレイヤー移動
-# =========================================================
 
 def move_player(dr, dc):
-
     if st.session_state.cleared:
         return
 
-    # リプレイ中はゴーストも1ステップ進む
+    # In replay mode, one ghost action is played for every player action.
     if st.session_state.phase == "replay":
         move_ghost()
 
     r, c = st.session_state.player
+    nxt = (r + dr, c + dc)
 
-    nr = r + dr
-    nc = c + dc
-
-    if not is_walkable(nr, nc):
-
-        st.session_state.message = (
-            "そこには移動できません。"
-        )
-
+    if not walkable(nxt):
+        st.session_state.message = "そこには移動できません。"
         return
 
-    # プレイヤー位置更新
-    st.session_state.player = (nr, nc)
-
-    # -----------------------------------------------------
-    # 記録フェーズ
-    # -----------------------------------------------------
+    st.session_state.player = nxt
 
     if st.session_state.phase == "record":
+        st.session_state.moves.append((dr, dc))
+        activate_switch_if_needed()
 
-        st.session_state.recorded_moves.append(
-            (dr, dc)
-        )
+    else:
+        activate_switch_if_needed()
 
-        # プレイヤーがスイッチを踏んだ
-        if st.session_state.player == SWITCH_POS:
-            st.session_state.switch_active = True
-
-        # ゴール
-        if st.session_state.player == GOAL_POS:
-
-            st.session_state.message = (
-                "ゴール地点に到達しました。"
-                "記録終了を押すとゴーストを作成できます。"
-            )
-
-    # -----------------------------------------------------
-    # リプレイフェーズ
-    # -----------------------------------------------------
-
-    elif st.session_state.phase == "replay":
-
-        if st.session_state.player == GOAL_POS:
-
+    # Goal check
+    if st.session_state.player == st.session_state.goal:
+        if st.session_state.phase == "replay":
             st.session_state.cleared = True
-
             st.session_state.message = (
-                "🎉 CLEAR!\n\n"
-                "過去の自分を利用してゴールしました！"
+                "🎉 CLEAR! 過去の自分を利用してゴールしました。"
+            )
+        else:
+            st.session_state.message = (
+                "ゴール地点です。記録終了後、同じルートをゴーストに任せて"
+                "別の道からゴールしてみましょう。"
             )
 
-
-# =========================================================
-# 記録終了
-# =========================================================
 
 def finish_recording():
-
-    if len(st.session_state.recorded_moves) == 0:
-
-        st.session_state.message = (
-            "まだ行動が記録されていません。"
-        )
-
+    if not st.session_state.moves:
+        st.session_state.message = "まず少なくとも1回移動してください。"
         return
 
     st.session_state.phase = "replay"
-
-    st.session_state.player = START_POS
-
-    st.session_state.ghost = START_POS
-
-    st.session_state.ghost_step = 0
-
-    st.session_state.switch_active = False
-
+    st.session_state.player = st.session_state.start
+    st.session_state.ghost = st.session_state.start
+    st.session_state.ghost_index = 0
+    st.session_state.switch_on = False
     st.session_state.message = (
-        "ゴーストが作成されました。\n\n"
-        "過去の自分が行動を再生しています。"
+        "👻 ゴースト生成完了。過去の自分と協力してゴールしてください。"
     )
 
 
-# =========================================================
-# マップ描画
-# =========================================================
+def retry_level():
+    load_level(st.session_state.level_index)
+
+
+def next_level():
+    if st.session_state.level_index + 1 < len(LEVELS):
+        st.session_state.level_index += 1
+        load_level(st.session_state.level_index)
+
+
+def elapsed_seconds():
+    return int(time.time() - st.session_state.level_start_time)
+
+
+def score():
+    # Higher is better.
+    base = 1000
+    penalty = len(st.session_state.moves) * 5
+    time_penalty = elapsed_seconds() * 2
+    return max(100, base - penalty - time_penalty)
+
+
+# ------------------------------------------------------------
+# Map renderer
+# ------------------------------------------------------------
 
 def render_map():
-
+    grid = st.session_state.grid
     player = st.session_state.player
     ghost = st.session_state.ghost
 
-    # HTML + CSS
-    html = """
+    rows = len(grid)
+    cols = len(grid[0])
+
+    html = f"""
     <style>
-
-    .map-container {
-        display: flex;
-        justify-content: center;
-        margin-top: 20px;
-        margin-bottom: 20px;
-    }
-
-    .trace-map {
-
-        display: grid;
-
-        grid-template-columns:
-        repeat(9, 45px);
-
-        grid-template-rows:
-        repeat(7, 45px);
-
-        gap: 3px;
-
-        padding: 8px;
-
-        background: #222;
-
-        border-radius: 10px;
-
-        box-shadow:
-        0 4px 12px rgba(0,0,0,0.25);
-    }
-
-    .tile {
-
-        width: 45px;
-        height: 45px;
-
-        display: flex;
-
-        align-items: center;
-        justify-content: center;
-
-        border-radius: 5px;
-
-        font-size: 24px;
-
-        font-weight: bold;
-
-        box-sizing: border-box;
-    }
-
-    /* 床 */
-
-    .floor {
-
-        background: #eeeeee;
-
-    }
-
-    /* 壁 */
-
-    .wall {
-
-        background: #333333;
-
-    }
-
-    /* スタート */
-
-    .start {
-
-        background: #d9ead3;
-
-    }
-
-    /* ゴール */
-
-    .goal {
-
-        background: #ffe599;
-
-    }
-
-    /* スイッチ */
-
-    .switch {
-
-        background: #ffd966;
-
-    }
-
-    /* 閉じたドア */
-
-    .door {
-
-        background: #9fc5e8;
-
-    }
-
-    /* 開いたドア */
-
-    .door-open {
-
-        background: #b6d7a8;
-
-    }
-
-    /* プレイヤー */
-
-    .player {
-
-        background: #4285f4;
-
-        color: white;
-
-        border:
-        4px solid #174ea6;
-
-        animation:
-        player-pulse 1s infinite;
-
-    }
-
-    /* ゴースト */
-
-    .ghost {
-
-        background: #a64d79;
-
-        color: white;
-
-        opacity: 0.65;
-
-    }
-
-    /* プレイヤーとゴーストが同じ場所 */
-
-    .both {
-
-        background: #674ea7;
-
-        color: white;
-
-        border: 4px solid #351c75;
-
-    }
-
-    @keyframes player-pulse {
-
-        0% {
-            transform: scale(1);
-        }
-
-        50% {
-            transform: scale(0.92);
-        }
-
-        100% {
-            transform: scale(1);
-        }
-
-    }
-
+    .trace-wrap {{
+        display:flex;
+        justify-content:center;
+        overflow-x:auto;
+        padding:8px 0 12px 0;
+    }}
+    .trace-map {{
+        display:grid;
+        grid-template-columns:repeat({cols}, 42px);
+        gap:3px;
+        background:#202020;
+        padding:7px;
+        border-radius:10px;
+    }}
+    .cell {{
+        width:42px;
+        height:42px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        border-radius:5px;
+        font-size:21px;
+        box-sizing:border-box;
+        user-select:none;
+    }}
+    .floor {{ background:#eeeeee; }}
+    .wall {{ background:#333333; }}
+    .goal {{ background:#ffe599; }}
+    .switch {{ background:#ffd966; }}
+    .door {{ background:#9fc5e8; }}
+    .dooropen {{ background:#b6d7a8; }}
+    .player {{
+        background:#4285f4;
+        color:white;
+        font-size:20px;
+        font-weight:bold;
+        border:3px solid #174ea6;
+    }}
+    .ghost {{
+        background:#a64d79;
+        color:white;
+        font-size:20px;
+        font-weight:bold;
+        opacity:.7;
+    }}
+    .both {{
+        background:#674ea7;
+        color:white;
+        font-size:15px;
+        font-weight:bold;
+        border:3px solid #351c75;
+    }}
     </style>
+    <div class="trace-wrap">
+    <div class="trace-map">
     """
 
-    html += '<div class="map-container">'
-    html += '<div class="trace-map">'
+    for r in range(rows):
+        for c in range(cols):
+            pos = (r, c)
+            value = grid[r][c]
+            is_p = pos == player
+            is_g = pos == ghost
 
-
-    # =====================================================
-    # 各マスを描画
-    # =====================================================
-
-    for r in range(ROWS):
-
-        for c in range(COLS):
-
-            tile = LEVEL[r][c]
-
-            position = (r, c)
-
-            is_player = position == player
-
-            is_ghost = position == ghost
-
-
-            # -------------------------------------------------
-            # 壁
-            # -------------------------------------------------
-
-            if tile == 1:
-
-                html += (
-                    '<div class="tile wall">⬛</div>'
-                )
-
-                continue
-
-
-            # -------------------------------------------------
-            # プレイヤー＋ゴースト
-            # -------------------------------------------------
-
-            if is_player and is_ghost:
-
-                html += (
-                    '<div class="tile both">P/G</div>'
-                )
-
-                continue
-
-
-            # -------------------------------------------------
-            # プレイヤー
-            # -------------------------------------------------
-
-            if is_player:
-
-                html += (
-                    '<div class="tile player">P</div>'
-                )
-
-                continue
-
-
-            # -------------------------------------------------
-            # ゴースト
-            # -------------------------------------------------
-
-            if is_ghost:
-
-                html += (
-                    '<div class="tile ghost">G</div>'
-                )
-
-                continue
-
-
-            # -------------------------------------------------
-            # その他のオブジェクト
-            # -------------------------------------------------
-
-            if tile == 2:
-
-                html += (
-                    '<div class="tile switch">S</div>'
-                )
-
-            elif tile == 3:
-
-                if st.session_state.switch_active:
-
-                    html += (
-                        '<div class="tile door-open">D</div>'
-                    )
-
-                else:
-
-                    html += (
-                        '<div class="tile door">🔒</div>'
-                    )
-
-            elif tile == 4:
-
-                html += (
-                    '<div class="tile goal">★</div>'
-                )
-
-            elif tile == 5:
-
-                html += (
-                    '<div class="tile start">START</div>'
-                )
-
+            if is_p and is_g:
+                html += '<div class="cell both">P+G</div>'
+            elif is_p:
+                html += '<div class="cell player">P</div>'
+            elif is_g:
+                html += '<div class="cell ghost">G</div>'
+            elif value == WALL:
+                html += '<div class="cell wall">⬛</div>'
+            elif value == GOAL:
+                html += '<div class="cell goal">⭐</div>'
+            elif value == SWITCH:
+                html += '<div class="cell switch">🟡</div>'
+            elif value == DOOR:
+                cls = "dooropen" if st.session_state.switch_on else "door"
+                symbol = "○" if st.session_state.switch_on else "🔒"
+                html += f'<div class="cell {cls}">{symbol}</div>'
+            elif value == CRATE:
+                html += '<div class="cell floor">📦</div>'
+            elif value == HAZARD:
+                html += '<div class="cell floor">⚠️</div>'
             else:
+                html += '<div class="cell floor"></div>'
 
-                html += (
-                    '<div class="tile floor"></div>'
-                )
+    html += "</div></div>"
 
-
-    html += "</div>"
-    html += "</div>"
+    st.components.v1.html(html, height=max(150, rows * 45 + 40))
 
 
-    # 凡例
-    html += """
-    <div style="
-        text-align:center;
-        font-size:14px;
-        margin-top:8px;
-    ">
+# ------------------------------------------------------------
+# Header
+# ------------------------------------------------------------
 
-    <b>P</b> プレイヤー　
-    <b>G</b> ゴースト　
-    <b>S</b> スイッチ　
-    <b>D</b> ドア　
-    <b>★</b> ゴール
-
-    </div>
-    """
-
-    st.components.v1.html(
-        html,
-        height=420
-    )
-
-
-# ======================
-# プレイヤー位置情報
-# =========================================================
-
-def show_player_position():
-
-    row, col = st.session_state.player
-
-    st.subheader("📍 プレイヤー位置")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.metric(
-            "行",
-            row
-        )
-
-    with col2:
-
-        st.metric(
-            "列",
-            col
-        )
-
-    with col3:
-
-        st.metric(
-            "座標",
-            f"({row}, {col})"
-        )
-
-
-# =========================================================
-# タイトル
-# =========================================================
+level = LEVELS[st.session_state.level_index]
 
 st.title("⏳ TRACE")
+st.caption("過去の自分をゲームの駒として利用するタイムパズル")
 
-st.caption(
-    "過去の自分を利用してゴールを目指すパズル"
+st.progress(
+    (st.session_state.level_index + 1) / len(LEVELS),
+    text=f"STAGE {st.session_state.level_index + 1} / {len(LEVELS)}"
 )
 
-
-# =========================================================
-# フェーズ表示
-# =========================================================
+st.subheader(level["name"])
+st.caption(level["hint"])
 
 if st.session_state.phase == "record":
-
-    st.info(
-        "🔵 RECORD PHASE — "
-        "プレイヤーの行動を記録しています"
-    )
-
+    st.info("🔵 RECORD — あなたの行動を記録中")
 else:
+    st.info("🟣 REPLAY — ゴーストが過去の行動を再生中")
 
-    st.info(
-        "🟣 REPLAY PHASE — "
-        "ゴーストが過去の行動を再生しています"
-    )
-
-
-# =========================================================
-# マップ
-# =========================================================
+# ------------------------------------------------------------
+# Map
+# ------------------------------------------------------------
 
 render_map()
 
+# ------------------------------------------------------------
+# Position / status
+# ------------------------------------------------------------
 
-# =========================================================
-# 現在位置
-# =========================================================
+pr, pc = st.session_state.player
 
-show_player_position()
+a, b, c = st.columns(3)
 
+with a:
+    st.metric("プレイヤー座標", f"({pr}, {pc})")
 
-# =========================================================
-# 状態
-# =========================================================
+with b:
+    st.metric("記録移動数", len(st.session_state.moves))
 
-st.write(
-    st.session_state.message
-)
+with c:
+    st.metric("ドア", "OPEN" if st.session_state.switch_on else "LOCKED")
 
+st.write(st.session_state.message)
 
-# =========================================================
-# ステータス
-# =========================================================
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-
-    st.metric(
-        "記録ステップ",
-        len(
-            st.session_state.recorded_moves
-        )
-    )
-
-with col2:
-
-    if st.session_state.phase == "replay":
-
-        st.metric(
-            "ゴースト",
-            f"{st.session_state.ghost_step}/"
-            f"{len(st.session_state.recorded_moves)}"
-        )
-
-    else:
-
-        st.metric(
-            "ゴースト",
-            "未作成"
-        )
-
-with col3:
-
-    st.metric(
-        "スイッチ",
-        "ON"
-        if st.session_state.switch_active
-        else "OFF"
-    )
-
-
-# =========================================================
-# 操作
-# =========================================================
+# ------------------------------------------------------------
+# Controls
+# ------------------------------------------------------------
 
 st.subheader("🎮 操作")
 
+a, b, c = st.columns(3)
 
-# 上
-col1, col2, col3 = st.columns(3)
-
-with col2:
-
-    if st.button(
-        "⬆️",
-        use_container_width=True
-    ):
-
+with b:
+    if st.button("⬆️", use_container_width=True):
         move_player(-1, 0)
-
         st.rerun()
 
+a, b, c = st.columns(3)
 
-# 左・下・右
-col1, col2, col3 = st.columns(3)
-
-with col1:
-
-    if st.button(
-        "⬅️",
-        use_container_width=True
-    ):
-
+with a:
+    if st.button("⬅️", use_container_width=True):
         move_player(0, -1)
-
         st.rerun()
 
-
-with col2:
-
-    if st.button(
-        "⬇️",
-        use_container_width=True
-    ):
-
+with b:
+    if st.button("⬇️", use_container_width=True):
         move_player(1, 0)
-
         st.rerun()
 
-
-with col3:
-
-    if st.button(
-        "➡️",
-        use_container_width=True
-    ):
-
+with c:
+    if st.button("➡️", use_container_width=True):
         move_player(0, 1)
-
         st.rerun()
 
-
-# =========================================================
-# 記録終了 / リセット
-# =========================================================
+# ------------------------------------------------------------
+# Main actions
+# ------------------------------------------------------------
 
 st.divider()
 
 if st.session_state.phase == "record":
-
     if st.button(
-        "⏺️ 記録終了 → ゴースト作成",
-        use_container_width=True
+        "⏺️ 記録終了 → ゴーストを作る",
+        use_container_width=True,
+        type="primary",
     ):
-
         finish_recording()
-
         st.rerun()
 
 else:
+    if not st.session_state.cleared:
+        st.caption(
+            "ゴーストは1回のプレイヤー操作につき1ステップ再生されます。"
+        )
 
-    if st.button(
-        "🔄 最初からやり直す",
-        use_container_width=True
-    ):
+# ------------------------------------------------------------
+# Clear screen
+# ------------------------------------------------------------
 
-        reset_game()
-
-        st.rerun()
-
-
-# =========================================================
-# 座標情報
-# =========================================================
-
-with st.expander("🗺️ マップ座標"):
+if st.session_state.cleared:
+    st.success(
+        f"🏆 STAGE CLEAR!   Score: {score()}"
+    )
 
     st.write(
-        "マップ左上を (0, 0) としています。"
+        f"移動数: {len(st.session_state.moves)}  /  "
+        f"時間: {elapsed_seconds()} 秒"
     )
 
-    st.code(
-        f"""
-プレイヤー:
-行 = {st.session_state.player[0]}
-列 = {st.session_state.player[1]}
+    a, b = st.columns(2)
 
-座標:
-{st.session_state.player}
-        """
+    with a:
+        if st.button("🔄 もう一度", use_container_width=True):
+            retry_level()
+            st.rerun()
+
+    with b:
+        if st.session_state.level_index + 1 < len(LEVELS):
+            if st.button("➡️ 次のステージ", use_container_width=True):
+                next_level()
+                st.rerun()
+        else:
+            st.balloons()
+            st.write("🎉 全ステージ制覇！")
+
+# ------------------------------------------------------------
+# General reset
+# ------------------------------------------------------------
+
+if not st.session_state.cleared:
+    if st.button("🔄 ステージを最初から", use_container_width=True):
+        retry_level()
+        st.rerun()
+
+# ------------------------------------------------------------
+# Level selector
+# ------------------------------------------------------------
+
+with st.expander("🗺️ ステージ選択"):
+    names = [f"{i+1}. {x['name']}" for i, x in enumerate(LEVELS)]
+    selected = st.selectbox(
+        "プレイするステージ",
+        names,
+        index=st.session_state.level_index,
     )
+    selected_index = names.index(selected)
 
+    if st.button("このステージを開始"):
+        st.session_state.level_index = selected_index
+        load_level(selected_index)
+        st.rerun()
 
-# =========================================================
-# 遊び方
-# =========================================================
+# ------------------------------------------------------------
+# Instructions
+# ------------------------------------------------------------
 
-with st.expander("📖 遊び方"):
-
+with st.expander("📖 ルール"):
     st.markdown(
         """
-### ① プレイヤーを操作
+### 目的
+⭐ **ゴール**に到達してください。
 
-矢印ボタンで青い **P** を移動させます。
+### RECORD
+最初のプレイでは、あなたの移動がすべて記録されます。
 
-### ② 行動を記録
+### REPLAY
+「記録終了」を押すと、その行動を再現する **G（ゴースト）** が出現します。
 
-最初のプレイでは、プレイヤーの移動が自動的に記録されます。
+あなたはゴーストとは別に動けます。
 
-### ③ 記録終了
+### スイッチ
+🟡 スイッチの上にプレイヤーまたはゴーストがいると、ドアが開きます。
 
-「記録終了」を押すと、最初のプレイが **G（ゴースト）** になります。
+### 攻略の基本
+1. 最初のターンでゴーストにスイッチを押させるルートを作る
+2. 記録を終了する
+3. ゴーストがスイッチへ向かっている間に自分を別ルートへ移動する
+4. ドアが開いたらゴールへ進む
 
-### ④ ゴーストを利用
-
-ゴーストは最初のプレイと同じ行動を繰り返します。
-
-ゴーストが **S（スイッチ）** を踏んでいる間に、自分を移動させます。
-
-### ⑤ ゴール
-
-**★** のゴールへ到達すればクリアです。
+**「失敗した自分の行動」が、次の挑戦の攻略手段になります。**
 """
     )
+
+# ------------------------------------------------------------
+# Technical information
+# ------------------------------------------------------------
+
+with st.expander("🔧 デバッグ情報"):
+    st.write("Phase:", st.session_state.phase)
+    st.write("Player:", st.session_state.player)
+    st.write("Ghost:", st.session_state.ghost)
+    st.write("Ghost step:", st.session_state.ghost_index)
+    st.write("Recorded moves:", st.session_state.moves)
+    st.write("Switch:", st.session_state.switch_on)
+'''
+path = Path("/mnt/data/trace_streamlit_game.py")
+path.write_text(code, encoding="utf-8")
+print(f"作成しました: {path}")
